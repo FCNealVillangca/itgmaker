@@ -16,7 +16,6 @@ import glob
 import random
 
 
-# --- FFmpeg Discovery ---
 def get_ffmpeg_path():
     try:
         import imageio_ffmpeg
@@ -143,6 +142,7 @@ class ITGMaker:
                 if t_name == "rec":
                     svg = f'<svg width="100" height="100"><path d="{paths[i]}" fill="#111" stroke="#ccc" stroke-width="4" opacity="0.6"/></svg>'
                 png = cairosvg.svg2png(bytestring=svg.encode())
+                # --- FIX: ADDED io.BytesIO(png) TO PREVENT CRASH ---
                 img = ImageTk.PhotoImage(
                     Image.open(io.BytesIO(png)).resize((70, 70), Image.LANCZOS)
                 )
@@ -193,29 +193,19 @@ class ITGMaker:
 
         npm = len(self.beat_times) / (self.duration / 60)
         smart_diff = max(2, min(13, int(npm / 40)))
-
         title = os.path.splitext(os.path.basename(self.video_path))[0]
-
-        # --- FIXED SYNC LOGIC ---
-        # 1. Standard ITG Offset: Adding 0.009 compensates for the engine's internal audio delay.
         itg_offset = -self.offset + 0.009
-
         content = [
             f"#TITLE:{title};",
             f"#OFFSET:{itg_offset:.3f};",
             f"#BPMS:0.000={self.tempo:.3f};",
         ]
-
         if music_file:
             content.append(f"#MUSIC:{music_file};")
         if image_file:
             content.append(f"#BANNER:{image_file};")
-
-        # 2. FIXED BGCHANGES: This tag locks the video to start at beat 0.000.
-        # This prevents the 'drifting' common with #BACKGROUND.
         if video_file:
             content.append(f"#BGCHANGES:0.000={video_file}=1.000=1=0=0=,,,;")
-
         content.extend(
             [
                 f"#NOTES:\n     dance-single:\n     ITGMaker:\n     Hard:\n     {smart_diff}:\n     0.8,0.8,0.8,0.8,0.8:",
@@ -223,11 +213,11 @@ class ITGMaker:
                 ";",
             ]
         )
-
         sm_path = os.path.join(save_dir if save_dir else self.data_dir, "chart.sm")
         with open(sm_path, "w", encoding="utf-8") as f:
             f.write("\n".join(content))
 
+    # --- FIX: MOVED EXPORT TO BACKGROUND THREAD & ADDED LOADING SCREEN ---
     def generate_chart(self):
         default_name = os.path.splitext(os.path.basename(self.video_path))[0]
         save_path = filedialog.asksaveasfilename(
@@ -238,8 +228,26 @@ class ITGMaker:
         if not save_path:
             return
 
+        self.preview_running = False
+        if hasattr(self, "cap"):
+            self.cap.release()
+        pygame.mixer.quit()
+
+        for w in self.root.winfo_children():
+            w.destroy()
+        tk.Label(
+            self.root,
+            text="EXPORTING... PLEASE WAIT\nDO NOT CLOSE THE PROGRAM",
+            font=("Arial", 18),
+        ).place(relx=0.5, rely=0.5, anchor="center")
+
+        threading.Thread(
+            target=self.export_thread_logic, args=(save_path, default_name), daemon=True
+        ).start()
+
+    def export_thread_logic(self, save_path, default_name):
         song_folder = os.path.join(os.path.dirname(save_path), default_name)
-        os.makedirs(song_folder, exist_ok=True)
+        os.makedirs(song_dir := song_folder, exist_ok=True)
         for old in glob.glob(os.path.join(song_folder, "*.sm")) + glob.glob(
             os.path.join(song_folder, "*.ssc")
         ):
@@ -249,7 +257,6 @@ class ITGMaker:
         video_name = f"{default_name}{os.path.splitext(self.video_path)[1]}"
         image_name = f"{default_name}-bn.png"
 
-        # ITGmania prefers .ogg for audio.
         subprocess.run(
             [
                 FFMPEG,
@@ -277,13 +284,16 @@ class ITGMaker:
                 "-update",
                 "1",
                 os.path.join(song_folder, image_name),
-            ]
+            ],
+            capture_output=True,
         )
 
         self.generate_chart_file(song_folder, music_name, video_name, image_name)
-        messagebox.showinfo(
-            "Export Done", f"Pack saved with fixed sync tags to:\n{song_folder}"
-        )
+        self.root.after(0, lambda: self.finish_export(song_folder))
+
+    def finish_export(self, folder):
+        messagebox.showinfo("Export Done", f"Pack saved to:\n{folder}")
+        self.show_upload_screen()
 
     def show_preview_screen(self):
         for w in self.root.winfo_children():
