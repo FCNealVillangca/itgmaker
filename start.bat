@@ -1,0 +1,6 @@
+@echo off
+echo [1] Activating conda environment: multipurpose...
+call conda activate multipurpose
+
+echo [2] Opening Antigravity...
+call antigravity .
