@@ -36,7 +36,7 @@ FFMPEG = get_ffmpeg_path()
 class ITGMaker:
     def __init__(self, root):
         self.root = root
-        root.title("ITGmania Generator - MUSIC & LEVEL FIXED")
+        root.title("ITGmania Generator - SYNC FIXED")
         root.geometry("1280x720")
 
         self.video_path = None
@@ -191,24 +191,30 @@ class ITGMaker:
                     lines.append("0000")
             measures.append("\n".join(lines))
 
-        # --- FIXED DIFFICULTY MATH ---
-        # Changed divisor to 40 and set minimum to 2
         npm = len(self.beat_times) / (self.duration / 60)
         smart_diff = max(2, min(13, int(npm / 40)))
 
         title = os.path.splitext(os.path.basename(self.video_path))[0]
+
+        # --- FIXED SYNC LOGIC ---
+        # 1. Standard ITG Offset: Adding 0.009 compensates for the engine's internal audio delay.
+        itg_offset = -self.offset + 0.009
+
         content = [
             f"#TITLE:{title};",
-            f"#OFFSET:{-self.offset:.3f};",
+            f"#OFFSET:{itg_offset:.3f};",
             f"#BPMS:0.000={self.tempo:.3f};",
         ]
 
         if music_file:
             content.append(f"#MUSIC:{music_file};")
-        if video_file:
-            content.append(f"#BACKGROUND:{video_file};")
         if image_file:
             content.append(f"#BANNER:{image_file};")
+
+        # 2. FIXED BGCHANGES: This tag locks the video to start at beat 0.000.
+        # This prevents the 'drifting' common with #BACKGROUND.
+        if video_file:
+            content.append(f"#BGCHANGES:0.000={video_file}=1.000=1=0=0=,,,;")
 
         content.extend(
             [
@@ -239,12 +245,11 @@ class ITGMaker:
         ):
             os.remove(old)
 
-        # File names for export
         music_name = f"{default_name}.ogg"
         video_name = f"{default_name}{os.path.splitext(self.video_path)[1]}"
         image_name = f"{default_name}-bn.png"
 
-        # 1. Extract MUSIC (Fixes "no music" and "0 score")
+        # ITGmania prefers .ogg for audio.
         subprocess.run(
             [
                 FFMPEG,
@@ -258,9 +263,7 @@ class ITGMaker:
             ],
             capture_output=True,
         )
-        # 2. Copy VIDEO
         shutil.copy2(self.video_path, os.path.join(song_folder, video_name))
-        # 3. Create BANNER
         subprocess.run(
             [
                 FFMPEG,
@@ -278,7 +281,9 @@ class ITGMaker:
         )
 
         self.generate_chart_file(song_folder, music_name, video_name, image_name)
-        messagebox.showinfo("Export Done", f"Fixed pack saved to:\n{song_folder}")
+        messagebox.showinfo(
+            "Export Done", f"Pack saved with fixed sync tags to:\n{song_folder}"
+        )
 
     def show_preview_screen(self):
         for w in self.root.winfo_children():
@@ -347,6 +352,8 @@ class ITGMaker:
             while self.last_frame_idx < idx:
                 ret, frame = self.cap.read()
                 self.last_frame_idx += 1
+                if not ret:
+                    break
             if ret:
                 f = cv2.cvtColor(cv2.resize(frame, (840, 720)), cv2.COLOR_BGR2RGB)
                 self.tk_img = ImageTk.PhotoImage(Image.fromarray(f))
